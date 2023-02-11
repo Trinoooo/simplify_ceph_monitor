@@ -1,5 +1,8 @@
 # 极简CEPH分布式文件系统监控节点实现
-![](https://img.shields.io/badge/author-trino-yellowgreen?link=https://trinoooo.github.io/&link=https://trinoooo.github.io/)
+<a target="_blank" href="https://trinoooo.github.io/">
+<img src="https://img.shields.io/badge/author-trino-yellowgreen"/>
+</a>
+
 ## 简介
 这是极简版的ceph-momitor代码实现，其中舍弃了很多官方版本中十分优雅的特性，这是因为我想通过抽象出最核心部分加深对ceph整体的理解。
 正如上文所说，我舍弃了很多官方版本中包含的特性，但是保留了最核心的逻辑。
@@ -18,5 +21,4 @@ go语言版本raft算法的实现很大程度上参考了eliben大佬的raft/tre
 ## 其他
 > 北海，要多想
 
-:star:**欢迎加星**:star:
 [![Stargazers over time](https://starchart.cc/Trinoooo/simplify_ceph_monitor.svg)](https://starchart.cc/Trinoooo/simplify_ceph_monitor)
