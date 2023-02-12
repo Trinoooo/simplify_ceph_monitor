@@ -1,8 +1,10 @@
 package consensus
 
 import (
-	"ceph/monitor/components/mon/server"
-	"ceph/monitor/components/mon/server/rpc_proxy"
+	monitor "ceph/monitor/mon"
+	"ceph/monitor/mon/server"
+	"ceph/monitor/mon/server/rpc_proxy"
+	other_rpc_proxy "ceph/monitor/others/server/rpc_proxy"
 	"log"
 	"math/rand"
 	"sync"
@@ -49,12 +51,12 @@ func (s State) String() string {
 type Consensus struct {
 	id          string // id
 	mu          sync.Mutex
-	logs        []*LogEntry    // 日志
-	server      *server.Server // 服务器模块，用于调用rpc
-	state       State          // 节点状态
-	peerIds     []string       // 共识系统中的其他节点
-	currentTerm int            // 当前任期
-	votedFor    string         //
+	logs        []*LogEntry      // 日志
+	server      *server.Server   // 服务器模块，用于调用rpc
+	monitor     *monitor.Monitor // 反向引用监控节点
+	state       State            // 节点状态
+	currentTerm int              // 当前任期
+	votedFor    string           //
 	// 选举重置时间，以下操作会使节点的选举重置时间刷新
 	// * follower收到心跳
 	// * follower转换为candidate
@@ -81,13 +83,12 @@ type Consensus struct {
 	matchIndex  map[string]int // 集群中其他节点的已经被存储的最后一个logEntry的索引
 }
 
-func NewConsensus(id string, server *server.Server, peerIds []string, commitChan chan CommitEntry) *Consensus {
+func NewConsensus(id string, server *server.Server, commitChan chan CommitEntry) *Consensus {
 	instance := &Consensus{
 		id:                id,
 		logs:              make([]*LogEntry, 0),
 		server:            server,
 		state:             Follower,
-		peerIds:           peerIds,
 		currentTerm:       0,
 		votedFor:          "",
 		electionResetTime: time.Now(),
@@ -139,10 +140,28 @@ func (c *Consensus) startLeader() {
 		ticker := time.NewTicker(time.Duration(50) * time.Millisecond)
 
 		for {
-			c.leaderSendHeartbeats()
+			// 发送mon集群内心跳包
+			go c.leaderSendHeartbeats()
+			// 发送mon集群外心跳包
+			go c.sendHeartbeats()
 			<-ticker.C
 		}
 	}()
+}
+
+func (c *Consensus) sendHeartbeats() {
+	ids := c.monitor.GetDetector().GetOtherIds()
+	args := other_rpc_proxy.HeartBeatArgs{}
+	for i := 0; i < len(ids); i++ {
+		go func(id string) {
+			reply := other_rpc_proxy.HeartBeatReply{}
+			err := c.server.Call(id, "HeartbeatsModule.HeartBeat", args, &reply)
+			if err != nil {
+				log.Printf("error occur when calling HeartbeatsModule.HeartBeat, err = %#v\n", err)
+				return
+			}
+		}(ids[i])
+	}
 }
 
 // startElection 外层调用者需要加锁
@@ -161,8 +180,10 @@ func (c *Consensus) startElection() {
 		CandidateId: c.id,
 		Term:        savedCurrentTerm,
 	}
-	for _, peerId := range c.peerIds {
+	peerIds := c.monitor.GetDetector().GetMonitorIds()
+	for _, peerId := range peerIds {
 		go func(peerId string) {
+
 			reply := rpc_proxy.RequestVoteReply{}
 			err := c.server.Call(peerId, "PeersModule.RequestVote", args, &reply)
 			if err != nil {
@@ -194,7 +215,7 @@ func (c *Consensus) startElection() {
 
 			if reply.Term == savedCurrentTerm && reply.VoteGranted {
 				voteReceived += 1
-				if voteReceived*2 >= len(c.peerIds)+1 {
+				if voteReceived*2 >= len(peerIds)+1 {
 					c.startLeader()
 					return
 				}
@@ -255,7 +276,8 @@ func (c *Consensus) leaderSendHeartbeats() {
 	c.mu.Unlock()
 
 	// 循环给其他节点发送心跳包
-	for _, peerId := range c.peerIds {
+	peerIds := c.monitor.GetDetector().GetMonitorIds()
+	for _, peerId := range peerIds {
 		// 设置局部变量，防止loop-closure问题
 		go func(peerId string) {
 			// 构造请求参数
@@ -306,7 +328,7 @@ func (c *Consensus) leaderSendHeartbeats() {
 					for i := savedCommitIndex + 1; i < len(c.logs); i++ {
 						if c.logs[i].Term == c.currentTerm {
 							matchCount := 1
-							for _, peerId := range c.peerIds {
+							for _, peerId := range peerIds {
 								// 上方收到对方成功存储logEntry的响应后更新matchIndex
 								// 这里比较matchIndex是要得出一个当前已经符合应用条件的节点个数
 								// 个数超过一半就可以应用日志
@@ -314,7 +336,7 @@ func (c *Consensus) leaderSendHeartbeats() {
 									matchCount++
 								}
 
-								if matchCount*2 > len(c.peerIds)+1 {
+								if matchCount*2 > len(peerIds)+1 {
 									c.commitIndex = i
 								}
 							}
@@ -325,7 +347,7 @@ func (c *Consensus) leaderSendHeartbeats() {
 						c.newCommitReadyChan <- struct{}{}
 					}
 				} else {
-					// TODO
+					c.nextIndex[peerId] = nextIndex - 1
 				}
 			}
 		}(peerId)
@@ -489,4 +511,12 @@ func (c *Consensus) Submit(command interface{}) bool {
 		return true
 	}
 	return false
+}
+
+// Report 上报当前节点的id、状态、任期
+func (c *Consensus) Report() (string, State, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.id, c.state, c.currentTerm
 }

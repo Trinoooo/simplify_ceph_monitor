@@ -1,11 +1,19 @@
 package rpc_proxy
 
-import "ceph/monitor/components/mon/consensus"
+import (
+	"ceph/monitor/mon/consensus"
+)
 
 // PeersRPCProxy mon集群中对等体间调用的rpc方法
 // 只涉及分布式共识（心跳包含在内）
 type PeersRPCProxy struct {
-	consensus *consensus.Consensus
+	c *consensus.Consensus
+}
+
+func NewPeersRPCProxy(c *consensus.Consensus) *PeersRPCProxy {
+	return &PeersRPCProxy{
+		c: c,
+	}
 }
 
 type RequestVoteArgs struct {
@@ -22,7 +30,7 @@ type RequestVoteReply struct {
 
 // RequestVote 处理候选者发送来的投票请求
 func (p *PeersRPCProxy) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) error {
-	return p.consensus.RequestVote(args, reply)
+	return p.c.RequestVote(args, reply)
 }
 
 type AppendEntriesArgs struct {
@@ -42,5 +50,5 @@ type AppendEntriesReply struct {
 
 // AppendEntries 心跳包 & 追加日志
 func (p *PeersRPCProxy) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) error {
-	return p.consensus.AppendEntries(args, reply)
+	return p.c.AppendEntries(args, reply)
 }
