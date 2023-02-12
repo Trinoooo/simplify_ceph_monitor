@@ -2,6 +2,7 @@
 <a target="_blank" href="https://trinoooo.github.io/">
 <img src="https://img.shields.io/badge/author-trino-yellowgreen"/>
 </a>
+<img alt="GitHub go.mod Go version (subdirectory of monorepo)" src="https://img.shields.io/github/go-mod/go-version/Trinoooo/simplify_ceph_monitor?filename=go_version%2Fgo.mod">
 
 ## 简介
 这是极简版的ceph-momitor代码实现，其中舍弃了很多官方版本中十分优雅的特性，这是因为我想通过抽象出最核心部分加深对ceph整体的理解。
@@ -21,4 +22,4 @@ go语言版本raft算法的实现很大程度上参考了eliben大佬的raft/tre
 ## 其他
 > 北海，要多想
 
-[![Stargazers over time](https://starchart.cc/Trinoooo/simplify_ceph_monitor.svg)](https://starchart.cc/Trinoooo/simplify_ceph_monitor)
+[![Star History Chart](https://api.star-history.com/svg?repos=Trinoooo/simplify_ceph_monitor&type=Date)](https://star-history.com/#Trinoooo/simplify_ceph_monitor&Date)
