@@ -1,9 +1,8 @@
 package server
 
 import (
-	monitor "ceph/monitor/mon"
+	"ceph/monitor/cephadm"
 	"ceph/monitor/mon/consensus"
-	"ceph/monitor/mon/server/rpc_proxy"
 	"log"
 	"net"
 	"net/rpc"
@@ -19,25 +18,26 @@ type Server struct {
 	clients    map[string]*rpc.Client // 与其他节点的rpc客户端
 	quitSignal chan struct{}          // shutdown信号通道
 	consensus  *consensus.Consensus
-	monitor    *monitor.Monitor
+	cephadm    *cephadm.Cephadm
 }
 
-func NewServer(c *consensus.Consensus, m *monitor.Monitor) *Server {
+func NewServer(c *consensus.Consensus, cephadm *cephadm.Cephadm, services map[string]interface{}) *Server {
 	server := new(Server)
 	server.clients = make(map[string]*rpc.Client)
 	server.quitSignal = make(chan struct{})
 	server.consensus = c
-	server.monitor = m
-	server.Server()
+	server.cephadm = cephadm
+	server.Server(services)
 	return server
 }
 
 // Server 挂载rpc代理，监听端口处理rpc请求
-func (s *Server) Server() {
+func (s *Server) Server(services map[string]interface{}) {
 	// 注册rpc代理到rpc服务器
 	var err error
-	s.server.RegisterName("PeersModule", rpc_proxy.NewPeersRPCProxy(s.consensus))
-	s.server.RegisterName("OthersModule", rpc_proxy.NewOthersRPCProxy(s.monitor))
+	for name, service := range services {
+		s.server.RegisterName(name, service)
+	}
 	s.listener, err = net.Listen("tcp", ":0")
 	if err != nil {
 		log.Fatal(err)
@@ -76,13 +76,13 @@ func (s *Server) Shutdown() {
 	s.listener.Close()
 	// 等待所有协程都执行完毕
 	s.wg.Wait()
-	s.DisconnectAll()
+	s.disconnectAll()
 }
 
 // ConnectToNode 和其他节点建立rpc连接，即获取rpc client
 // id 另一个节点id
 // addr 另一个节点地址
-func (s *Server) ConnectToNode(id string, addr net.Addr) {
+func (s *Server) connectToNode(id string, addr net.Addr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.clients[id] != nil {
@@ -99,20 +99,7 @@ func (s *Server) ConnectToNode(id string, addr net.Addr) {
 	s.clients[id] = client
 }
 
-// DisconnectNode 断开与指定节点的rpc连接
-// id 另一个节点id
-func (s *Server) DisconnectNode(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.clients[id] == nil {
-		log.Println("node !exists")
-		return
-	}
-	s.clients[id].Close()
-	s.clients[id] = nil
-}
-
-func (s *Server) DisconnectAll() {
+func (s *Server) disconnectAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -137,8 +124,8 @@ func (s *Server) Call(id string, method string, args interface{}, reply interfac
 	s.mu.Unlock()
 
 	if client == nil {
-		addr := s.monitor.GetDetector().GetListenAddr(id)
-		s.ConnectToNode(id, addr)
+		addr := s.cephadm.GetListenAddr(id)
+		s.connectToNode(id, addr)
 	}
 
 	return client.Call(method, args, reply)

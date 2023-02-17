@@ -2,7 +2,6 @@ package server
 
 import (
 	"ceph/monitor/others"
-	"ceph/monitor/others/server/rpc_proxy"
 	"log"
 	"net"
 	"net/rpc"
@@ -10,63 +9,25 @@ import (
 )
 
 type Server struct {
-	mu         sync.Mutex
-	server     *rpc.Server
-	listener   net.Listener
-	wg         sync.WaitGroup
-	quitSignal chan struct{}
-	clients    map[string]*rpc.Client
-	node       *others.OtherNode
+	mu      sync.Mutex
+	server  *rpc.Server
+	wg      sync.WaitGroup
+	clients map[string]*rpc.Client
+	node    *others.OtherNode
 }
 
-func NewServer(node *others.OtherNode) *Server {
+func NewServer(node *others.OtherNode, services map[string]interface{}) *Server {
 	server := new(Server)
 	server.server = rpc.NewServer()
-	server.quitSignal = make(chan struct{})
 	server.clients = make(map[string]*rpc.Client)
 	server.node = node
-	server.Serve()
 	return server
-}
-
-func (s *Server) Serve() {
-	// 注册rpc服务
-	s.server.RegisterName("HeartbeatsModule", rpc_proxy.Heartbeats{})
-	var err error
-
-	// 开始监听本地随机端口
-	s.listener, err = net.Listen("tcp", ":0")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for {
-			conn, err := s.listener.Accept()
-			if err != nil {
-				select {
-				case <-s.quitSignal:
-					return
-				default:
-					log.Fatal(err)
-				}
-			}
-
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				s.server.ServeConn(conn)
-			}()
-		}
-	}()
 }
 
 // ConnectToNode 和其他节点建立rpc连接，即获取rpc client
 // id 另一个节点id
 // addr 另一个节点地址
-func (s *Server) ConnectToNode(id string, addr net.Addr) {
+func (s *Server) connectToNode(id string, addr net.Addr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.clients[id] != nil {
@@ -83,20 +44,7 @@ func (s *Server) ConnectToNode(id string, addr net.Addr) {
 	s.clients[id] = client
 }
 
-// DisconnectNode 断开与指定节点的rpc连接
-// id 另一个节点id
-func (s *Server) DisconnectNode(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.clients[id] == nil {
-		log.Println("node !exists")
-		return
-	}
-	s.clients[id].Close()
-	s.clients[id] = nil
-}
-
-func (s *Server) DisconnectAll() {
+func (s *Server) disconnectAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -112,14 +60,8 @@ func (s *Server) DisconnectAll() {
 // Shutdown
 // 停止当前节点，中断其中所有连接
 func (s *Server) Shutdown() {
-	close(s.quitSignal)
-	s.listener.Close()
+	s.disconnectAll()
 	s.wg.Wait()
-	s.DisconnectAll()
-}
-
-func (s *Server) GetListenAddr() net.Addr {
-	return s.listener.Addr()
 }
 
 func (s *Server) Call(id, method string, args, reply interface{}) error {
@@ -129,8 +71,8 @@ func (s *Server) Call(id, method string, args, reply interface{}) error {
 	s.mu.Unlock()
 
 	if client == nil {
-		addr := s.node.GetDetector().GetListenAddr(id)
-		s.ConnectToNode(id, addr)
+		addr := s.node.GetCephadm().GetListenAddr(id)
+		s.connectToNode(id, addr)
 	}
 
 	return client.Call(method, args, reply)

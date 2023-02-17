@@ -1,10 +1,11 @@
 package consensus
 
 import (
+	"ceph/monitor/cephadm"
 	monitor "ceph/monitor/mon"
 	"ceph/monitor/mon/server"
 	"ceph/monitor/mon/server/rpc_proxy"
-	other_rpc_proxy "ceph/monitor/others/server/rpc_proxy"
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -31,6 +32,13 @@ const (
 	Dead      State = 4
 )
 
+// 日志中command的格式
+// 操作:数据对象:id[:值]
+const (
+	COMMAND_VALUE_FORMAT = "%s:%s:%s:%s"
+	COMMAND_FORMAT       = "%s:%s:%s"
+)
+
 func (s State) String() string {
 	switch s {
 	case Follower:
@@ -49,14 +57,15 @@ func (s State) String() string {
 // Consensus
 // 共识的一个重要原则是永远不接受比自己任期小的请求
 type Consensus struct {
-	id          string // id
-	mu          sync.Mutex
+	id          string           // id
+	mu          sync.Mutex       // 互斥锁，保护线程安全
 	logs        []*LogEntry      // 日志
 	server      *server.Server   // 服务器模块，用于调用rpc
-	monitor     *monitor.Monitor // 反向引用监控节点
+	cephadm     *cephadm.Cephadm // admin模块
+	monitor     *monitor.Monitor // 监控节点
 	state       State            // 节点状态
 	currentTerm int              // 当前任期
-	votedFor    string           //
+	votedFor    string           // 刚给谁投过票
 	// 选举重置时间，以下操作会使节点的选举重置时间刷新
 	// * follower收到心跳
 	// * follower转换为candidate
@@ -81,18 +90,21 @@ type Consensus struct {
 	commitIndex int
 	nextIndex   map[string]int // 集群中其他节点的下一个带被接受的logEntry索引
 	matchIndex  map[string]int // 集群中其他节点的已经被存储的最后一个logEntry的索引
+	leaderId    string         // 当前集群中monitor leader节点的id
 }
 
-func NewConsensus(id string, server *server.Server, commitChan chan CommitEntry) *Consensus {
+func NewConsensus(id string, server *server.Server, commitChan chan CommitEntry, cephadm *cephadm.Cephadm, monitor *monitor.Monitor) *Consensus {
 	instance := &Consensus{
 		id:                id,
 		logs:              make([]*LogEntry, 0),
 		server:            server,
+		cephadm:           cephadm,
 		state:             Follower,
 		currentTerm:       0,
 		votedFor:          "",
 		electionResetTime: time.Now(),
 		commitChan:        commitChan,
+		monitor:           monitor,
 	}
 
 	// 初始化共识模块后状态为follower，故要开启选举倒计时
@@ -134,33 +146,32 @@ func (c *Consensus) becomeFollower(term int) {
 func (c *Consensus) startLeader() {
 	c.state = Leader
 
-	// 需要持续向其他节点发送心跳包
 	go func() {
 		// 每50ms发送一次心跳包
 		ticker := time.NewTicker(time.Duration(50) * time.Millisecond)
 
 		for {
-			// 发送mon集群内心跳包
+			// 需要持续向其他节点发送心跳包
 			go c.leaderSendHeartbeats()
-			// 发送mon集群外心跳包
-			go c.sendHeartbeats()
+			// 需要持续监听集群外部节点心跳通信状态
+			go c.leaderCheckExternalHeartbeatsState()
 			<-ticker.C
 		}
 	}()
 }
 
-func (c *Consensus) sendHeartbeats() {
-	ids := c.monitor.GetDetector().GetOtherIds()
-	args := other_rpc_proxy.HeartBeatArgs{}
-	for i := 0; i < len(ids); i++ {
-		go func(id string) {
-			reply := other_rpc_proxy.HeartBeatReply{}
-			err := c.server.Call(id, "HeartbeatsModule.HeartBeat", args, &reply)
-			if err != nil {
-				log.Printf("error occur when calling HeartbeatsModule.HeartBeat, err = %#v\n", err)
-				return
-			}
-		}(ids[i])
+// leaderCheckExternalHeartbeatsState
+// 当节点角色切换为leader后，持续监听外部节点最后更新心跳时间的表
+// 如果有超过指定时间还没收到心跳包的外部节点，则认为不可达，提交删除该节点记录的命令
+func (c *Consensus) leaderCheckExternalHeartbeatsState() {
+	states := c.monitor.GetNodeState()
+	now := time.Now()
+	for id, lastHeartbeatTime := range states {
+		// 超过50ms还没有心跳包来，就认为这个外部节点不可达了
+		if now.Sub(lastHeartbeatTime) > 50*time.Millisecond {
+			command := fmt.Sprintf(COMMAND_FORMAT, "DEL", "nodes", id)
+			c.Submit(command)
+		}
 	}
 }
 
@@ -172,7 +183,7 @@ func (c *Consensus) startElection() {
 	c.electionResetTime = time.Now()
 	c.votedFor = c.id
 
-	//自己给自己投一票
+	// 自己给自己投一票
 	voteReceived := 1
 
 	// 循环调用rpc给自己拉票
@@ -180,8 +191,12 @@ func (c *Consensus) startElection() {
 		CandidateId: c.id,
 		Term:        savedCurrentTerm,
 	}
-	peerIds := c.monitor.GetDetector().GetMonitorIds()
+	peerIds := c.cephadm.GetMonitorIds()
 	for _, peerId := range peerIds {
+		// 跳过自己
+		if peerId == c.id {
+			continue
+		}
 		go func(peerId string) {
 
 			reply := rpc_proxy.RequestVoteReply{}
@@ -276,8 +291,12 @@ func (c *Consensus) leaderSendHeartbeats() {
 	c.mu.Unlock()
 
 	// 循环给其他节点发送心跳包
-	peerIds := c.monitor.GetDetector().GetMonitorIds()
+	peerIds := c.cephadm.GetMonitorIds()
 	for _, peerId := range peerIds {
+		// 跳过自己
+		if peerId == c.id {
+			continue
+		}
 		// 设置局部变量，防止loop-closure问题
 		go func(peerId string) {
 			// 构造请求参数
@@ -302,6 +321,7 @@ func (c *Consensus) leaderSendHeartbeats() {
 
 			reply := &rpc_proxy.AppendEntriesReply{}
 			err := c.server.Call(peerId, "PeersModule.AppendEntries", args, &reply)
+			// 如果请求发送失败，认为是对方不可用，更新集群状态
 			if err != nil {
 				log.Println(err)
 				return
@@ -400,6 +420,7 @@ func (c *Consensus) AppendEntries(args *rpc_proxy.AppendEntriesArgs, reply *rpc_
 		return nil
 	}
 
+	c.leaderId = args.LeaderId
 	if args.Term > c.currentTerm {
 		c.becomeFollower(args.Term)
 	}
@@ -514,9 +535,9 @@ func (c *Consensus) Submit(command interface{}) bool {
 }
 
 // Report 上报当前节点的id、状态、任期
-func (c *Consensus) Report() (string, State, int) {
+func (c *Consensus) Report() (string, State, int, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.id, c.state, c.currentTerm
+	return c.id, c.state, c.currentTerm, c.leaderId
 }
