@@ -13,15 +13,16 @@
 - [x] 分布式共识算法实现（Raft）
 - [x] ceph分布式系统中各集群状态维护
 - [x] 监控节点集群对外状态查询
-- [ ] 监控节点集群整体测试方案
+- [x] 监控节点集群整体测试方案
 ## 快速开始
-请通过代码中的测试框架查看运行结果
-- TODO
+请通过代码中的测试框架查看运行结果<br>
+**注意：测试用例并没有完全覆盖，仅演示常规case**
+- unit_test.go
 ## 引用
 go语言版本raft算法的实现很大程度上参考了eliben大佬的raft项目
 - [仓库地址](https://github.com/eliben/raft/tree/master)
 - [大佬个人博客](https://eli.thegreenplace.net/2020/implementing-raft-part-0-introduction/)
 ## 其他
-> 北海，要多想
+> 欢迎pr和issue
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Trinoooo/simplify_ceph_monitor&type=Date)](https://star-history.com/#Trinoooo/simplify_ceph_monitor&Date)

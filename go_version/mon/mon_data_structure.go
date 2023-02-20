@@ -1,7 +1,7 @@
-package common
+package monitor
 
 import (
-	"ceph/monitor/others"
+	"ceph/monitor/consts"
 	"time"
 )
 
@@ -16,5 +16,5 @@ type OSDTopology struct {
 // Node 维护外部节点信息
 type Node struct {
 	LeastHeartbeat time.Time
-	NodeType       others.NodeType
+	NodeType       consts.NodeType
 }

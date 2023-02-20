@@ -1,6 +1,7 @@
 package cephadm
 
 import (
+	"log"
 	"net"
 	"sync"
 )
@@ -14,9 +15,9 @@ type Cephadm struct {
 }
 
 func NewCephadm() *Cephadm {
-	cephadm := new(Cephadm)
-	cephadm.monitors = make(map[string]net.Addr)
-	return cephadm
+	return &Cephadm{
+		monitors: make(map[string]net.Addr),
+	}
 }
 
 // GetMonitorIds
@@ -38,7 +39,7 @@ func (c *Cephadm) GetMonitorIds() []string {
 func (c *Cephadm) AddMonitor(id string, addr net.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
+	log.Printf("mon(id:%s) register to cephadm", id)
 	c.monitors[id] = addr
 }
 
@@ -48,7 +49,7 @@ func (c *Cephadm) AddMonitor(id string, addr net.Addr) {
 func (c *Cephadm) RemoveMonitor(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
+	log.Printf("mon(id:%s) remove from cephadm", id)
 	delete(c.monitors, id)
 }
 

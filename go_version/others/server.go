@@ -1,7 +1,6 @@
-package server
+package others
 
 import (
-	"ceph/monitor/others"
 	"log"
 	"net"
 	"net/rpc"
@@ -10,15 +9,13 @@ import (
 
 type Server struct {
 	mu      sync.Mutex
-	server  *rpc.Server
 	wg      sync.WaitGroup
 	clients map[string]*rpc.Client
-	node    *others.OtherNode
+	node    *OtherNode
 }
 
-func NewServer(node *others.OtherNode, services map[string]interface{}) *Server {
+func NewServer(node *OtherNode, services map[string]interface{}) *Server {
 	server := new(Server)
-	server.server = rpc.NewServer()
 	server.clients = make(map[string]*rpc.Client)
 	server.node = node
 	return server
@@ -57,22 +54,23 @@ func (s *Server) disconnectAll() {
 	}
 }
 
-// Shutdown
+// shutdown
 // 停止当前节点，中断其中所有连接
-func (s *Server) Shutdown() {
+func (s *Server) shutdown() {
 	s.disconnectAll()
-	s.wg.Wait()
 }
 
-func (s *Server) Call(id, method string, args, reply interface{}) error {
+func (s *Server) call(id, method string, args, reply interface{}) error {
+	log.Printf("[%s]%s call %s from mon(id:%s), args:%v", s.node.nodeType, s.node.id, method, id, args)
 	s.mu.Lock()
 	// 获取客户端，如果没有则建立连接
 	client := s.clients[id]
 	s.mu.Unlock()
 
 	if client == nil {
-		addr := s.node.GetCephadm().GetListenAddr(id)
+		addr := s.node.cephadm.GetListenAddr(id)
 		s.connectToNode(id, addr)
+		client = s.clients[id]
 	}
 
 	return client.Call(method, args, reply)
